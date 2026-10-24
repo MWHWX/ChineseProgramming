@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+.venv/
+*.egg-info/
+dist/
+build/
+.DS_Store
+out/
+
+# Rust 构建产物（rust_runtime/ 作为独立 crate 就地构建时产生）
+target/
