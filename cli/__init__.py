@@ -234,6 +234,10 @@ def cmd_init(args) -> int:
     (project_dir / "output").mkdir()
     
     # 创建示例协议文件
+    # #6：脚手架必须能过自家流水线——旧模板写 `则德 累积信任值。`（非数值操作数），
+    # `compile-pbc` 判编译错误而 `check`/`compile` 判通过，新用户按 init 提示走
+    # 第一步就撞墙。现改为数值操作数（`德 0.5；`）并补一条条件语句示范，
+    # 保持教学意图（道/德/若…则/止 四种形态）且三条后端全通。
     example = project_dir / "src" / "main.proto"
     example.write_text("""// 协议示例 —— 由 pc init 生成
 // 编辑此文件，然后运行：pc compile src/main.proto -o output/
@@ -242,7 +246,9 @@ def cmd_init(args) -> int:
 答曰：它展示了基本的协议结构。
 术曰：
 1。道 示例路径；
-2。若条件空间为默认，则德 累积信任值。
+2。德 0.5；
+3。若 信任值 大于 0.3，则 德 0.2；
+4。止。
 """, encoding="utf-8")
     
     # 创建配置文件
