@@ -183,7 +183,15 @@ class Compiler:
         elif op == TokenType.ZHI:
             self._emit(Opcode.ZHI)
         elif op == TokenType.ZHIZU:
-            threshold = float(val) if val is not None else 0.0
+            # 以名举实（与上方 `德` 分支同口径，隔 12 行）：非数值操作数必须在
+            # **编译期**拦成干净的编译错误，而不是让 `float(val)` 从编译器内部抛
+            # 裸 `ValueError` 逃逸到用户面前。判据来源：公开 issue #8（`知足 值；`
+            # 裸崩而 `德 值；` 给干净错误）+ #5（check 与 compile-pbc 结论相反）。
+            try:
+                threshold = float(val) if val is not None else 0.0
+            except (TypeError, ValueError):
+                raise SyntaxError(
+                    f"L{s.line} 知足 的操作数必须是数值，得到 '{val}'（名实不符）")
             lbl = self._new_label()
             self._emit(Opcode.ZHIZU, (threshold, lbl))
             self.pending.append((len(self.code) - 1, lbl))
