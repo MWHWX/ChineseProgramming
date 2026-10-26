@@ -88,6 +88,60 @@ class CompileResult:
 # 核心编译函数
 # =============================================================================
 
+_NUMERIC_OPERAND_GATE = False   # 待维护者裁定；见下方 docstring
+
+def _numeric_operand_errors(ast) -> list:
+    """`德` / `知足` 的操作数必须是数值：三条后端共用的单一判据（#5 提案，默认关闭）。
+
+    背景：`check`/`compile` 走 `CodeGenerator`（不做操作数类型校验），
+    `compile-pbc` 走 `compiler.Compiler._instr`（`德`/`知足` 对非数值操作数抛
+    SyntaxError）⇒ 同一份源码两条后端结论相反（issue #5）。
+
+    为何默认关闭：本仓既有测试 `tests/test_full_pipeline.py`（L46/L55）以
+    `德 累积信任值；` 作为**应编译成功**的样例 ⇒ 「非数值操作数必须拒绝」
+    属设计取舍，不能由单个 PR 改变语义。打开 `_NUMERIC_OPERAND_GATE` 即让
+    三条后端同口径（判据词与 compiler 侧逐字一致）。
+
+    覆盖范围：只覆盖 `德`(DE) / `知足`(ZHIZU) 两条有数值语义的指令。
+    """
+    out = []
+    candidates = []
+    for node in getattr(ast, "statements", []) or []:
+        if getattr(node, "instruction", None) is not None:
+            candidates.append(node)
+        for step in getattr(node, "steps", None) or []:
+            inner = getattr(step, "statement", None)
+            if inner is not None and getattr(inner, "instruction", None) is not None:
+                candidates.append(inner)
+    for stmt in candidates:
+        instr = getattr(stmt, "instruction", None)
+        if instr is None:
+            continue
+        name = getattr(instr, "name", "")
+        if name not in ("DE", "ZHIZU"):
+            continue
+        operands = getattr(stmt, "operands", []) or []
+        if not operands:
+            continue
+        op0 = operands[0]
+        tname = getattr(getattr(op0, "type", None), "name", "")
+        if tname == "LITERAL":
+            val = getattr(op0, "literal_value", None)
+        elif tname == "IDENTIFIER":
+            val = getattr(op0, "name", None)
+        else:
+            val = None
+        if val is None:
+            continue
+        try:
+            float(val)
+        except (TypeError, ValueError):
+            label = "德" if name == "DE" else "知足"
+            out.append(f"L{getattr(stmt, 'line', '?')} {label} 的操作数必须是数值，"
+                       f"得到 '{val}'（名实不符）")
+    return out
+
+
 def compile_source(source: str, options: Optional[CompileOptions] = None) -> CompileResult:
     """
     核心编译函数 —— 所有入口的统一调用点
@@ -163,6 +217,17 @@ def compile_source(source: str, options: Optional[CompileOptions] = None) -> Com
         except Exception as e:
             result.warnings.append(f"LLM 辅助失败: {e}")
     
+    # ---- 第 4.5 步：指令操作数类型闸（#5 三后端口径统一）----
+    # 背景：`compile-pbc` 走 `compiler.Compiler._instr`，其 `德`/`知足` 分支对非
+    # 数值操作数抛 `SyntaxError`（干净编译错误）；而本函数走 `CodeGenerator`，
+    # 后者把操作数无条件转成字符串/字面量、**从不做类型校验** ⇒ 同一份源码
+    # `check` / `compile` 判通过、`compile-pbc` 判错误（issue #5 的三后端口径分歧）。
+    #
+    # 修法：把 `德`/`知足` 的「操作数必须是数值」判据**前置到统一调用点**（本函数），
+    # 使三条后端（check / compile / compile-pbc）共用同一判据；判据措辞与
+    # `compiler.Compiler._instr` 逐字一致（含「名实不符」），避免两处漂移。
+    # 边界：只覆盖 `德`/`知足` 两条有数值语义的指令（其余助记符的操作数语义
+    # 未定义，不在本闸范围——不擅定为其它指令发明类型判据）。
     # ---- 第五步：代码生成 ----
     gen = CodeGenerator(checker)
     code = gen.generate(ast)
