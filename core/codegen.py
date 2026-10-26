@@ -305,9 +305,18 @@ class CodeGenerator:
     
     def _gen_condition(self, stmt: ConditionStmtNode):
         """生成条件语句"""
-        self._write(f"if ")
-        self._gen_expression(stmt.condition)
-        self._writeln(":")
+        # 条件行必须整体成行：旧实现 `_write("if ")` + 表达式 + `_writeln(":")`，
+        # 而 `_write` 在"上一行以换行结尾"时用 `"    " * indent_level` 起新行、
+        # 否则追加到上一行 ⇒ 与前置注释/步骤行组合时生成 `# 步骤 3if 信任值 > 0.2`
+        # 与孤立的 `    :` 两行非法代码。改为先算条件文本再整行写出。
+        cond_buf = []
+        _orig_write, _orig_writeln = self._write, self._writeln
+        self._write = cond_buf.append
+        try:
+            self._gen_expression(stmt.condition)
+        finally:
+            self._write, self._writeln = _orig_write, _orig_writeln
+        self._writeln("if " + "".join(cond_buf) + ":")
         self.indent_level += 1
         self._generate_statement(stmt.then_body)
         self.indent_level -= 1
@@ -321,7 +330,9 @@ class CodeGenerator:
     def _gen_instruction(self, stmt: InstructionStmtNode):
         """生成指令语句"""
         instr_name = INSTRUCTION_NAMES.get(stmt.instruction, "未知指令")
-        self._write(f"# {instr_name}")
+        # 注释必须**独占一行**：旧实现用 `_write`（不换行），随后 `_writeln(code)`
+        # 把代码接到注释后面 ⇒ 生成 `    :# 德（累积信任）` 这类非法行。
+        self._writeln(f"# {instr_name}")
         
         # 生成参数
         args = []
@@ -342,7 +353,12 @@ class CodeGenerator:
         else:
             code = template
         
-        self._writeln(f"  →  {code}")
+        # 修掉「装饰性前缀写进代码」的缺陷：旧实现把 `  →  ` 作为可读性前缀一起
+        # 写进生成的 Python 源 ⇒ 生成物含 U+2192 箭头、**整份语法非法**
+        # （`ast.parse` 报 `invalid character '→' (U+2192)`），而 CLI 照报
+        # 「✅ 编译成功」——官方示例 examples/trust.proto 生成的 17 行指令全部不可执行。
+        # 现在直接写代码本身；可读性靠上方的 `# {指令名}` 注释行（保留）。
+        self._writeln(code)   # 缩进由 _writeln 按 indent_level 自动加
     
     def _gen_assign(self, stmt: AssignStmtNode):
         """生成赋值语句"""
