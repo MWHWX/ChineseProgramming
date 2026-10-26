@@ -115,15 +115,65 @@ def create_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _load_project_config(input_path: str) -> dict:
+    """读取项目根 `protocol.toml`（#7：该文件原先零读取点，改它不生效）。
+
+    查找口径：从源文件所在目录向上逐级找 `protocol.toml`，找到即用；
+    找不到返回 `{}`（`cli init` 之外的项目没有该文件属正常）。
+    只解析 `[compiler] strict / llm_assist` 与 `[runtime] path`（`cli init`
+    写出的全部字段）；未知键忽略（前向兼容）。
+    """
+    try:
+        import os as _os
+        d = _os.path.dirname(_os.path.abspath(input_path))
+        root = None
+        for _ in range(20):
+            cand = _os.path.join(d, "protocol.toml")
+            if _os.path.exists(cand):
+                root = cand
+                break
+            parent = _os.path.dirname(d)
+            if parent == d:
+                break
+            d = parent
+        if root is None:
+            return {}
+        cfg, section = {}, None
+        with open(root, encoding="utf-8") as f:
+            for raw in f:
+                line = raw.split("#", 1)[0].strip()
+                if not line:
+                    continue
+                if line.startswith("[") and line.endswith("]"):
+                    section = line[1:-1].strip()
+                    continue
+                if "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                k, v = k.strip(), v.strip().strip('"')
+                if section == "compiler" and k in ("strict", "llm_assist"):
+                    cfg[k] = (v.lower() == "true")
+                elif section == "runtime" and k == "path":
+                    cfg["runtime_path"] = v
+        return cfg
+    except Exception:
+        # 配置读取失败不得阻断编译——按「无配置」继续
+        return {}
+
+
 def cmd_compile(args) -> int:
     """执行 compile 命令"""
     source = _read_input(args.input)
     if source is None:
         return 1
     
+    # #7：命令行显式 flag 优先；未显式给出时读项目 protocol.toml
+    cfg = _load_project_config(args.input)
+    strict = args.strict or cfg.get("strict", args.strict)
+    llm = args.llm_assist or cfg.get("llm_assist", args.llm_assist)
     options = CompileOptions(
-        llm_assist=args.llm_assist,
-        strict=args.strict,
+        llm_assist=llm,
+        strict=strict,
     )
     
     result = compile_source(source, options)
@@ -408,7 +458,9 @@ def cmd_compile_pbc(args) -> int:
     if src is None:
         print(f"错误：无法读取 {args.input}")
         return 1
-    code, result = compile_to_pbc(src, args.output)
+    # #7：`[compiler] strict` 参与名实校验口径（命令行无 strict flag 时读配置）
+    cfg = _load_project_config(args.input)
+    code, result = compile_to_pbc(src, args.output, strict=bool(cfg.get("strict", False)))
     if not result["ok"]:
         for e in result["errors"][:5]:
             print(f"编译错误: {e}")
@@ -439,7 +491,10 @@ def cmd_rust(args) -> int:
     import json
     import os
     import sys
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")  # #1：不替换对象——pytest 捕获兼容
+    except (AttributeError, ValueError):
+        pass
     from core.rust_codegen import build_and_run, generate_rust_project
     source = _read_input(args.input)
     if source is None:
